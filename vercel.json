@@ -1,0 +1,11 @@
+{
+  "buildCommand": "pnpm build",
+  "outputDirectory": "public",
+  "rewrites": [
+    { "source": "/v1/:path*", "destination": "/api/v1/:path*" },
+    {
+      "source": "/documentation/:path*",
+      "destination": "/api/documentation/:path*"
+    }
+  ]
+}
