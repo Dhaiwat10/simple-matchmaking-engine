@@ -12,8 +12,11 @@ export default async function handler(
   await ready;
   const url = new URL(req.url ?? "/", "http://localhost");
   const prefix =
-    url.pathname === "/api/documentation" ? "/documentation" : "/v1";
+    url.searchParams.get("...path") === "documentation"
+      ? "/documentation"
+      : "/v1";
   const remainder = url.searchParams.get("path");
+  url.searchParams.delete("...path");
   url.searchParams.delete("path");
   req.url = `${prefix}${remainder ? `/${remainder}` : ""}${url.search}`;
   app.server.emit("request", req, res);
