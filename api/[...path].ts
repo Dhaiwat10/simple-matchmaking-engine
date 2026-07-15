@@ -2,13 +2,18 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 
 import { createApp } from "../src/app.js";
 
-const app = createApp();
-const ready = app.ready();
+let app: ReturnType<typeof createApp> | undefined;
+let ready: ReturnType<ReturnType<typeof createApp>["ready"]> | undefined;
 
 export default async function handler(
   req: VercelRequest,
   res: VercelResponse,
 ): Promise<void> {
+  if (!app) {
+    app = createApp();
+    ready = app.ready();
+  }
+  const initializedApp = app;
   await ready;
   const url = new URL(req.url ?? "/", "http://localhost");
   const prefix =
@@ -19,5 +24,5 @@ export default async function handler(
   url.searchParams.delete("...path");
   url.searchParams.delete("path");
   req.url = `${prefix}${remainder ? `/${remainder}` : ""}${url.search}`;
-  app.server.emit("request", req, res);
+  initializedApp.server.emit("request", req, res);
 }
