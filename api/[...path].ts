@@ -10,6 +10,11 @@ export default async function handler(
   res: VercelResponse,
 ): Promise<void> {
   await ready;
-  req.url = (req.url ?? "/").replace(/^\/api(?=\/|$)/, "") || "/";
+  const url = new URL(req.url ?? "/", "http://localhost");
+  const prefix =
+    url.pathname === "/api/documentation" ? "/documentation" : "/v1";
+  const remainder = url.searchParams.get("path");
+  url.searchParams.delete("path");
+  req.url = `${prefix}${remainder ? `/${remainder}` : ""}${url.search}`;
   app.server.emit("request", req, res);
 }

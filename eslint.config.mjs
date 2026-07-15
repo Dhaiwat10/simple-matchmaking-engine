@@ -6,7 +6,13 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "node_modules/**", "coverage/**", "public/**"],
+    ignores: [
+      ".vercel/**",
+      "dist/**",
+      "node_modules/**",
+      "coverage/**",
+      "public/**",
+    ],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
