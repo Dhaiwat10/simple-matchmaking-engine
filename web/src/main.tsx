@@ -56,6 +56,8 @@ function App() {
   });
   const [viewedMatch, setViewedMatch] = useState<Match | null>(null);
   const [realtimeState, setRealtimeState] = useState("connecting");
+  const [queueMutationPending, setQueueMutationPending] = useState(false);
+  const [pendingMove, setPendingMove] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -126,43 +128,113 @@ function App() {
   }, [viewedMatch]);
 
   const join = async () => {
+    if (queueMutationPending || status.state === "QUEUED") return;
+
+    const previousStatus = status;
+    const previousMatch = viewedMatch;
     setError(null);
+    setQueueMutationPending(true);
+    setStatus({ state: "QUEUED", queueEntry: { id: "pending" } });
+    setViewedMatch(null);
+
     try {
       const nextStatus = await api<Status>("/v1/queue", { method: "POST" });
       setStatus(nextStatus);
-      if (nextStatus.state === "MATCHED") setViewedMatch(nextStatus.match);
+      setViewedMatch(nextStatus.state === "MATCHED" ? nextStatus.match : null);
     } catch (reason) {
+      setStatus(previousStatus);
+      setViewedMatch(previousMatch);
       setError(
         reason instanceof Error ? reason.message : "Unable to join queue",
       );
+    } finally {
+      setQueueMutationPending(false);
     }
   };
 
   const move = async (position: number) => {
-    if (!viewedMatch || viewedMatch.game.nextPlayerId !== id) return;
+    if (
+      !viewedMatch ||
+      pendingMove !== null ||
+      viewedMatch.game.nextPlayerId !== id ||
+      viewedMatch.game.board[position]
+    ) {
+      return;
+    }
+
+    const participant = viewedMatch.participants.find(
+      ({ playerId }) => playerId === id,
+    );
+    const opponent = viewedMatch.participants.find(
+      ({ playerId }) => playerId !== id,
+    );
+    if (!participant || !opponent) return;
+
+    const mark: Mark = participant.slot === 1 ? "X" : "O";
+    const previousMatch = viewedMatch;
+    const optimisticMatch: Match = {
+      ...previousMatch,
+      game: {
+        ...previousMatch.game,
+        board: previousMatch.game.board.map((cell, index) =>
+          index === position ? mark : cell,
+        ),
+        nextPlayerId: opponent.playerId,
+      },
+    };
     setError(null);
+    setPendingMove(position);
+    setViewedMatch(optimisticMatch);
+
     try {
-      setViewedMatch(
-        await api<Match>(`/v1/matches/${viewedMatch.id}/moves`, {
+      const confirmedMatch = await api<Match>(
+        `/v1/matches/${previousMatch.id}/moves`,
+        {
           method: "POST",
           body: JSON.stringify({ position }),
-        }),
+        },
+      );
+      setViewedMatch((currentMatch) =>
+        currentMatch?.id === optimisticMatch.id &&
+        currentMatch.game.nextPlayerId === optimisticMatch.game.nextPlayerId &&
+        currentMatch.game.board[position] === mark
+          ? confirmedMatch
+          : currentMatch,
       );
     } catch (reason) {
+      setViewedMatch((currentMatch) =>
+        currentMatch?.id === optimisticMatch.id &&
+        currentMatch.game.nextPlayerId === optimisticMatch.game.nextPlayerId &&
+        currentMatch.game.board[position] === mark
+          ? previousMatch
+          : currentMatch,
+      );
       setError(reason instanceof Error ? reason.message : "Move was rejected");
+    } finally {
+      setPendingMove(null);
     }
   };
 
   const leave = async () => {
+    if (queueMutationPending || status.state !== "QUEUED") return;
+
+    const previousStatus = status;
+    const previousMatch = viewedMatch;
     setError(null);
+    setQueueMutationPending(true);
+    setStatus({ state: "IDLE" });
+    setViewedMatch(null);
+
     try {
       await api<void>("/v1/queue", { method: "DELETE" });
-      setStatus({ state: "IDLE" });
-      setViewedMatch(null);
     } catch (reason) {
+      setStatus(previousStatus);
+      setViewedMatch(previousMatch);
       setError(
         reason instanceof Error ? reason.message : "Unable to leave queue",
       );
+    } finally {
+      setQueueMutationPending(false);
     }
   };
 
@@ -204,9 +276,13 @@ function App() {
           <div className="actions">
             <button
               onClick={() => void join()}
-              disabled={status.state === "QUEUED"}
+              disabled={queueMutationPending || status.state === "QUEUED"}
             >
-              {status.state === "QUEUED" ? "Finding game…" : "Find game"}
+              {queueMutationPending
+                ? status.state === "QUEUED"
+                  ? "Finding game…"
+                  : "Leaving queue…"
+                : "Find game"}
             </button>
             {status.state === "QUEUED" && (
               <button className="secondary" onClick={() => void leave()}>
@@ -218,9 +294,11 @@ function App() {
           <>
             <p className="turn">
               You are <strong>{yourMark}</strong>.{" "}
-              {viewedMatch.game.nextPlayerId === id
-                ? "Your move."
-                : "Opponent is choosing…"}
+              {pendingMove !== null
+                ? "Sending move…"
+                : viewedMatch.game.nextPlayerId === id
+                  ? "Your move."
+                  : "Opponent is choosing…"}
             </p>
             <div className="board">
               {viewedMatch.game.board.map((mark, position) => (
@@ -233,7 +311,9 @@ function App() {
                   }
                   onClick={() => void move(position)}
                   disabled={
-                    Boolean(mark) || viewedMatch.game.nextPlayerId !== id
+                    pendingMove !== null ||
+                    Boolean(mark) ||
+                    viewedMatch.game.nextPlayerId !== id
                   }
                 >
                   {mark}
@@ -246,6 +326,7 @@ function App() {
           <div className="result">
             <h2>{result}</h2>
             <button
+              disabled={queueMutationPending}
               onClick={() => {
                 setViewedMatch(null);
                 void join();
