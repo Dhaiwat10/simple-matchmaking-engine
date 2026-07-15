@@ -1,3 +1,4 @@
+import * as Ably from "ably";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -54,6 +55,7 @@ function App() {
     activeMatches: 0,
   });
   const [viewedMatch, setViewedMatch] = useState<Match | null>(null);
+  const [realtimeState, setRealtimeState] = useState("connecting");
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -75,20 +77,44 @@ function App() {
   }, []);
 
   useEffect(() => {
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 750);
-    return () => window.clearInterval(timer);
+    const client = new Ably.Realtime({
+      authUrl: "/v1/realtime/token",
+      authHeaders: { "X-Player-Id": id },
+    });
+    const playerChannel = client.channels.get(`player:${id}`);
+    const metricsChannel = client.channels.get("matchmaking:metrics");
+
+    client.connection.on((stateChange) => {
+      setRealtimeState(stateChange.current);
+    });
+    client.connection.on("connected", () => {
+      void refresh();
+    });
+    void Promise.all([
+      playerChannel.subscribe("match.updated", (message) => {
+        const match = message.data as Match;
+        setViewedMatch(match);
+        setStatus({ state: "MATCHED", match });
+      }),
+      metricsChannel.subscribe("metrics.updated", (message) => {
+        setMetrics(message.data as QueueMetrics);
+      }),
+    ]).catch((reason: unknown) => {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Unable to subscribe to live updates",
+      );
+    });
+
+    return () => {
+      client.close();
+    };
   }, [refresh]);
 
   useEffect(() => {
-    if (!viewedMatch || viewedMatch.status !== "OPEN") return;
-    const timer = window.setInterval(() => {
-      void api<Match>(`/v1/matches/${viewedMatch.id}`)
-        .then(setViewedMatch)
-        .catch(() => undefined);
-    }, 750);
-    return () => window.clearInterval(timer);
-  }, [viewedMatch?.id, viewedMatch?.status]);
+    void refresh();
+  }, [refresh]);
 
   const yourMark = useMemo(() => {
     if (!viewedMatch) return null;
@@ -127,6 +153,19 @@ function App() {
     }
   };
 
+  const leave = async () => {
+    setError(null);
+    try {
+      await api<void>("/v1/queue", { method: "DELETE" });
+      setStatus({ state: "IDLE" });
+      setViewedMatch(null);
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Unable to leave queue",
+      );
+    }
+  };
+
   const title =
     status.state === "QUEUED"
       ? "Searching for another player…"
@@ -155,6 +194,11 @@ function App() {
           {metrics.queuedPlayers} searching · {metrics.activeMatches} live
           matches
         </p>
+        <p className="identity">
+          {realtimeState === "connected"
+            ? "Live updates connected"
+            : `Live updates: ${realtimeState}`}
+        </p>
         {error && <p className="error">{error}</p>}
         {!viewedMatch || viewedMatch.status !== "OPEN" ? (
           <div className="actions">
@@ -165,12 +209,7 @@ function App() {
               {status.state === "QUEUED" ? "Finding game…" : "Find game"}
             </button>
             {status.state === "QUEUED" && (
-              <button
-                className="secondary"
-                onClick={() =>
-                  api("/v1/queue", { method: "DELETE" }).then(refresh)
-                }
-              >
+              <button className="secondary" onClick={() => void leave()}>
                 Leave queue
               </button>
             )}

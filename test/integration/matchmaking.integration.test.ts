@@ -14,6 +14,7 @@ import {
   type DatabaseConnection,
 } from "../../src/db/database.js";
 import { runMigrations } from "../../src/db/migrate.js";
+import { TestRealtimeGateway } from "../support/realtime.js";
 
 const playerA = "11111111-1111-4111-8111-111111111111";
 const playerB = "22222222-2222-4222-8222-222222222222";
@@ -22,6 +23,7 @@ const outsider = "33333333-3333-4333-8333-333333333333";
 let container: StartedPostgreSqlContainer;
 let app: FastifyInstance;
 let database: DatabaseConnection;
+let realtime: TestRealtimeGateway;
 
 function playerHeaders(playerId: string): Record<string, string> {
   return { "x-player-id": playerId };
@@ -51,7 +53,8 @@ beforeAll(async () => {
   const databaseUrl = container.getConnectionUri();
   await runMigrations(databaseUrl);
   database = createDatabase(databaseUrl);
-  app = createApp({ databaseUrl });
+  realtime = new TestRealtimeGateway();
+  app = createApp({ databaseUrl, realtime });
   await app.ready();
 });
 
@@ -59,6 +62,7 @@ beforeEach(async () => {
   await sql`TRUNCATE TABLE queue_entries, match_participants, players, matches RESTART IDENTITY CASCADE`.execute(
     database.db,
   );
+  realtime.publications.splice(0);
 });
 
 afterAll(async () => {
@@ -97,6 +101,34 @@ describe("matchmaking integration contract", () => {
     });
     expect(firstStatus.statusCode).toBe(200);
     expect(firstStatus.json()).toEqual({ state: "MATCHED", match });
+    expect(
+      realtime.publications.filter(
+        (publication) => publication.type === "match",
+      ),
+    ).toHaveLength(1);
+    expect(
+      realtime.publications.filter(
+        (publication) => publication.type === "metrics",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("issues a player-scoped realtime subscription token", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/realtime/token",
+      headers: playerHeaders(playerA),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      clientId: playerA,
+      capability: JSON.stringify({
+        [`player:${playerA}`]: ["subscribe"],
+        "matchmaking:metrics": ["subscribe"],
+      }),
+      keyName: "test-key",
+    });
   });
 
   it("rejects missing and malformed development player IDs", async () => {

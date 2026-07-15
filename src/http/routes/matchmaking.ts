@@ -5,6 +5,7 @@ import type { ZodTypeProvider } from "fastify-type-provider-zod";
 
 import type { MatchView } from "../../domain/matchmaking.js";
 import { MatchmakingService } from "../../services/matchmaking-service.js";
+import type { RealtimeGateway } from "../../realtime/gateway.js";
 import {
   errorResponseSchema,
   matchParamsSchema,
@@ -13,14 +14,37 @@ import {
   moveBodySchema,
   matchedStatusSchema,
   playerIdHeadersSchema,
+  queueMetricsSchema,
+  realtimeTokenSchema,
   queuedStatusSchema,
 } from "../schemas.js";
 
 export function registerMatchmakingRoutes(
   app: FastifyInstance,
   service: MatchmakingService,
+  realtime: RealtimeGateway,
 ): void {
   const routes = app.withTypeProvider<ZodTypeProvider>();
+  const publishRealtime = async (
+    match: MatchView | undefined,
+    includeMetrics: boolean,
+  ): Promise<void> => {
+    const publications: Promise<void>[] = [];
+    if (match) publications.push(realtime.publishMatch(match));
+    if (includeMetrics) {
+      publications.push(
+        service
+          .getQueueMetrics()
+          .then((metrics) => realtime.publishMetrics(metrics)),
+      );
+    }
+
+    try {
+      await Promise.all(publications);
+    } catch (error) {
+      routes.log.error(error, "Realtime publication failed after commit");
+    }
+  };
 
   routes.route({
     method: "POST",
@@ -38,6 +62,11 @@ export function registerMatchmakingRoutes(
     },
     handler: async (request, reply) => {
       const result = await service.joinQueue(request.playerId);
+
+      await publishRealtime(
+        result.outcome === "MATCHED" ? result.status.match : undefined,
+        result.outcome !== "ALREADY_QUEUED",
+      );
 
       if (result.outcome === "MATCHED") {
         return reply.code(201).send(result.status);
@@ -71,10 +100,7 @@ export function registerMatchmakingRoutes(
     schema: {
       headers: playerIdHeadersSchema,
       response: {
-        200: z.object({
-          queuedPlayers: z.number().int().nonnegative(),
-          activeMatches: z.number().int().nonnegative(),
-        }),
+        200: queueMetricsSchema,
         400: errorResponseSchema,
         500: errorResponseSchema,
       },
@@ -82,6 +108,19 @@ export function registerMatchmakingRoutes(
     handler: async () => service.getQueueMetrics(),
   });
 
+  routes.route({
+    method: "GET",
+    url: "/realtime/token",
+    schema: {
+      headers: playerIdHeadersSchema,
+      response: {
+        200: realtimeTokenSchema,
+        400: errorResponseSchema,
+        500: errorResponseSchema,
+      },
+    },
+    handler: async (request) => realtime.createTokenRequest(request.playerId),
+  });
   routes.route({
     method: "DELETE",
     url: "/queue",
@@ -95,6 +134,7 @@ export function registerMatchmakingRoutes(
     },
     handler: async (request, reply) => {
       await service.leaveQueue(request.playerId);
+      await publishRealtime(undefined, true);
       return reply.code(204).send();
     },
   });
@@ -133,12 +173,15 @@ export function registerMatchmakingRoutes(
         500: errorResponseSchema,
       },
     },
-    handler: async (request): Promise<MatchView> =>
-      service.makeMove(
+    handler: async (request): Promise<MatchView> => {
+      const match = await service.makeMove(
         request.playerId,
         request.params.matchId,
         request.body.position,
-      ),
+      );
+      await publishRealtime(match, false);
+      return match;
+    },
   });
 
   for (const [path, status] of [
@@ -160,8 +203,15 @@ export function registerMatchmakingRoutes(
           500: errorResponseSchema,
         },
       },
-      handler: async (request): Promise<MatchView> =>
-        service.endMatch(request.playerId, request.params.matchId, status),
+      handler: async (request): Promise<MatchView> => {
+        const match = await service.endMatch(
+          request.playerId,
+          request.params.matchId,
+          status,
+        );
+        await publishRealtime(match, true);
+        return match;
+      },
     });
   }
 }

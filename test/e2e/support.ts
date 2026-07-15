@@ -11,6 +11,7 @@ import {
   type DatabaseConnection,
 } from "../../src/db/database.js";
 import { runMigrations } from "../../src/db/migrate.js";
+import { TestRealtimeGateway } from "../support/realtime.js";
 
 export type E2eServer = {
   baseUrl: string;
@@ -30,7 +31,10 @@ export async function startE2eServer(): Promise<E2eServer> {
   await runMigrations(databaseUrl);
 
   const database: DatabaseConnection = createDatabase(databaseUrl);
-  const app: FastifyInstance = createApp({ databaseUrl });
+  const app: FastifyInstance = createApp({
+    databaseUrl,
+    realtime: new TestRealtimeGateway(),
+  });
   const baseUrl = await app.listen({ host: "127.0.0.1", port: 0 });
 
   return {

@@ -14,12 +14,14 @@ const databaseUrlSchema = z
 
 const configSchema = z.object({
   DATABASE_URL: databaseUrlSchema,
+  ABLY_API_KEY: z.string().min(1, "ABLY_API_KEY is required"),
   HOST: z.string().min(1).default("0.0.0.0"),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
 });
 
 export type AppConfig = {
   databaseUrl: string;
+  ablyApiKey: string;
   host: string;
   port: number;
 };
@@ -31,6 +33,7 @@ export function loadConfig(
 
   return {
     databaseUrl: parsed.DATABASE_URL,
+    ablyApiKey: parsed.ABLY_API_KEY,
     host: parsed.HOST,
     port: parsed.PORT,
   };

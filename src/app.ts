@@ -17,14 +17,24 @@ import { createDatabase } from "./db/database.js";
 import { registerDevelopmentPlayerAuth } from "./http/auth.js";
 import { registerErrorHandler } from "./http/errors.js";
 import { registerMatchmakingRoutes } from "./http/routes/matchmaking.js";
+import {
+  AblyRealtimeGateway,
+  type RealtimeGateway,
+} from "./realtime/gateway.js";
 import { MatchmakingService } from "./services/matchmaking-service.js";
 
 export type CreateAppOptions = {
   databaseUrl?: string;
+  realtime?: RealtimeGateway;
 };
 
 export function createApp(options: CreateAppOptions = {}): FastifyInstance {
-  const databaseUrl = options.databaseUrl ?? loadConfig().databaseUrl;
+  const config =
+    options.databaseUrl && options.realtime ? undefined : loadConfig();
+  const databaseUrl = options.databaseUrl ?? config?.databaseUrl;
+  if (!databaseUrl) throw new Error("DATABASE_URL is required");
+  const realtime =
+    options.realtime ?? new AblyRealtimeGateway(config?.ablyApiKey ?? "");
   const connection = createDatabase(databaseUrl);
   const service = new MatchmakingService(connection.db);
   const app = Fastify({
@@ -59,7 +69,7 @@ export function createApp(options: CreateAppOptions = {}): FastifyInstance {
   void app.register(
     async (v1) => {
       registerDevelopmentPlayerAuth(v1);
-      registerMatchmakingRoutes(v1, service);
+      registerMatchmakingRoutes(v1, service, realtime);
     },
     { prefix: "/v1" },
   );

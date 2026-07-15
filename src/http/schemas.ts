@@ -70,6 +70,21 @@ export const matchmakingStatusSchema = z.discriminatedUnion("state", [
   matchedStatusSchema,
 ]);
 
+export const queueMetricsSchema = z.object({
+  queuedPlayers: z.number().int().nonnegative(),
+  activeMatches: z.number().int().nonnegative(),
+});
+
+export const realtimeTokenSchema = z.object({
+  capability: z.string(),
+  clientId: z.string().uuid().optional(),
+  keyName: z.string(),
+  mac: z.string(),
+  nonce: z.string(),
+  timestamp: z.number().int(),
+  ttl: z.number().int().positive().optional(),
+});
+
 export const errorResponseSchema = z.object({
   error: z.object({
     code: z.string(),

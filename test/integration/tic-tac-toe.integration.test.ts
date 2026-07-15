@@ -7,18 +7,21 @@ import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
 
 import { createApp } from "../../src/app.js";
 import { runMigrations } from "../../src/db/migrate.js";
+import { TestRealtimeGateway } from "../support/realtime.js";
 
 const x = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const o = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 let container: StartedPostgreSqlContainer;
 let app: FastifyInstance;
+let realtime: TestRealtimeGateway;
 
 const headers = (id: string) => ({ "x-player-id": id });
 
 beforeAll(async () => {
   container = await new PostgreSqlContainer("postgres:16").start();
   await runMigrations(container.getConnectionUri());
-  app = createApp({ databaseUrl: container.getConnectionUri() });
+  realtime = new TestRealtimeGateway();
+  app = createApp({ databaseUrl: container.getConnectionUri(), realtime });
   await app.ready();
 });
 
