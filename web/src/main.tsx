@@ -31,13 +31,14 @@ function playerId(): string {
 const id = playerId();
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers);
+  headers.set("X-Player-Id", id);
+  if (init.body !== undefined && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
   const response = await fetch(path, {
     ...init,
-    headers: {
-      "X-Player-Id": id,
-      "content-type": "application/json",
-      ...init.headers,
-    },
+    headers,
   });
   if (!response.ok)
     throw new Error((await response.json()).error?.message ?? "Request failed");
@@ -186,6 +187,11 @@ function App() {
               {viewedMatch.game.board.map((mark, position) => (
                 <button
                   key={position}
+                  aria-label={
+                    mark
+                      ? `Cell ${position + 1}: ${mark}`
+                      : `Cell ${position + 1}`
+                  }
                   onClick={() => void move(position)}
                   disabled={
                     Boolean(mark) || viewedMatch.game.nextPlayerId !== id
