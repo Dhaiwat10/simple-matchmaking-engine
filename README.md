@@ -1,6 +1,6 @@
 # Matchmaking Engine API
 
-A deliberately small Fastify, PostgreSQL, Kysely, and TypeScript backend project. Players enter one global FIFO queue; the engine atomically pairs two players into a 1v1 match; clients poll state and either participant can complete or cancel the match. There is intentionally no game server, browser client, result authority, rating system, or team model.
+A small Fastify, PostgreSQL, Kysely, React, and TypeScript project. Players enter a global FIFO queue, the engine atomically forms 1v1 matches, and the browser provides an authoritative tic-tac-toe game backed by persisted PostgreSQL match and move state.
 
 ## Local startup
 
@@ -10,6 +10,7 @@ Requirements: Node 22+, pnpm, Docker Desktop, and a running Docker daemon.
 pnpm install
 docker compose up -d postgres
 DATABASE_URL=postgresql://matchmaking:matchmaking@localhost:5432/matchmaking pnpm db:migrate
+pnpm build
 DATABASE_URL=postgresql://matchmaking:matchmaking@localhost:5432/matchmaking pnpm start
 ```
 
@@ -50,16 +51,17 @@ Every response includes `X-Request-Id`. Errors never expose PostgreSQL details a
 }
 ```
 
-| Method   | Endpoint                        | Success             | Purpose                                                      |
-| -------- | ------------------------------- | ------------------- | ------------------------------------------------------------ |
-| `POST`   | `/v1/queue`                     | `200`, `201`, `202` | Reuse an existing ticket, form a match, or queue the player. |
-| `GET`    | `/v1/matchmaking/status`        | `200`               | Poll `IDLE`, `QUEUED`, or `MATCHED` state.                   |
-| `DELETE` | `/v1/queue`                     | `204`               | Idempotently cancel only a queued ticket.                    |
-| `GET`    | `/v1/matches/:matchId`          | `200`               | Fetch a participant-owned open or terminal match.            |
-| `POST`   | `/v1/matches/:matchId/complete` | `200`               | Complete an `OPEN` match as either participant.              |
-| `POST`   | `/v1/matches/:matchId/cancel`   | `200`               | Cancel an `OPEN` match as either participant.                |
-
-Relevant failure codes: `INVALID_PLAYER_ID` (`400`), `MATCH_FORBIDDEN` (`403`), `MATCH_NOT_FOUND` (`404`), `MATCH_IN_PROGRESS` and `MATCH_ALREADY_TERMINAL` (`409`), plus `INTERNAL_ERROR` (`500`).
+| Method                                                                                                                                                                                              | Endpoint                        | Success             | Purpose                                                           |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- | ------------------- | ----------------------------------------------------------------- |
+| `POST`                                                                                                                                                                                              | `/v1/queue`                     | `200`, `201`, `202` | Reuse an existing ticket, form a match, or queue the player.      |
+| `GET`                                                                                                                                                                                               | `/v1/matchmaking/status`        | `200`               | Poll `IDLE`, `QUEUED`, or `MATCHED` state.                        |
+| `GET`                                                                                                                                                                                               | `/v1/matchmaking/metrics`       | `200`               | Read live queued-player and active-match counts.                  |
+| `DELETE`                                                                                                                                                                                            | `/v1/queue`                     | `204`               | Idempotently cancel only a queued ticket.                         |
+| `GET`                                                                                                                                                                                               | `/v1/matches/:matchId`          | `200`               | Fetch a participant-owned open or terminal match.                 |
+| `POST`                                                                                                                                                                                              | `/v1/matches/:matchId/moves`    | `200`               | Submit one legal position from `0` through `8` for the next turn. |
+| `POST`                                                                                                                                                                                              | `/v1/matches/:matchId/complete` | `200`               | Complete an `OPEN` match as either participant.                   |
+| `POST`                                                                                                                                                                                              | `/v1/matches/:matchId/cancel`   | `200`               | Cancel an `OPEN` match as either participant.                     |
+| Relevant failure codes: `INVALID_PLAYER_ID` (`400`), `MATCH_FORBIDDEN` (`403`), `MATCH_NOT_FOUND` (`404`), `MATCH_IN_PROGRESS` and `MATCH_ALREADY_TERMINAL` (`409`), plus `INTERNAL_ERROR` (`500`). |
 
 ## Concurrency and data integrity
 
@@ -100,7 +102,28 @@ The React/Vite browser app creates a UUID in `localStorage`, joins the same queu
 
 The browser polls matchmaking status, queue metrics, and the active match every 750 ms. This is deliberate for the first shareable version: ordinary HTTP is portable to Vercel Functions, reconnect-free, and sufficient for a nine-move game. WebSockets are deferred because Vercel support is beta, connections are duration-bound and instance-pinned, and scalable room fan-out needs a separate durable pub/sub layer. SSE is unidirectional and still needs reconnect and fan-out handling.
 
-Set `DATABASE_URL` in Vercel and deploy the repository. `vercel.json` builds the Vite client into `public/` and routes `/v1/*` plus `/documentation/*` through the Fastify Vercel function.
+### Vercel deployment
+
+Vercel serves the Vite build from `public/` and runs Fastify as the `api/[...path].ts` serverless function. `vercel.json` rewrites `/v1/*` and `/documentation/*` to that function, so the browser and API share one origin; there is no persistent Fastify process or second deployment to manage.
+
+1. Create a Neon PostgreSQL database and apply migrations using its direct connection URL:
+
+   ```bash
+   DATABASE_URL='postgresql://…' pnpm db:migrate
+   ```
+
+2. In Vercel, set the **pooled** Neon connection string as `DATABASE_URL` for Production and Preview.
+3. Disable Production Deployment Protection before sharing the game; otherwise visitors receive Vercel authentication pages instead of API JSON.
+4. Deploy the repository, then verify the production API:
+
+   ```bash
+   curl -i https://YOUR-DOMAIN/v1/matchmaking/status \
+     -H 'X-Player-Id: 11111111-1111-4111-8111-111111111111'
+   ```
+
+   Expected: `HTTP 200` with `{"state":"IDLE"}` or a queued/matched status.
+
+The `X-Player-Id` header remains development-only identity. Do not expose this deployment as a production authenticated game without replacing it with verified server-side identity.
 
 ## Intentional future extensions
 
